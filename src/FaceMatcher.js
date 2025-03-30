@@ -8,12 +8,11 @@ const FaceMatcher = ({ mainImage, imageArray }) => {
   useEffect(() => {
     const loadModels = async () => {
       try {
-        await Promise.all([
-          faceapi.nets.ssdMobilenetv1.loadFromUri("/models"),
-          faceapi.nets.faceLandmark68Net.loadFromUri("/models"),
-          faceapi.nets.faceRecognitionNet.loadFromUri("/models"),
-        ]);
+        await faceapi.nets.ssdMobilenetv1.loadFromUri("/models");
+        await faceapi.nets.faceLandmark68Net.loadFromUri("/models");
+        await faceapi.nets.faceRecognitionNet.loadFromUri("/models");
         setModelsLoaded(true);
+        console.log("Models loaded successfully");
       } catch (error) {
         console.error("Error loading models:", error);
       }
@@ -29,13 +28,18 @@ const FaceMatcher = ({ mainImage, imageArray }) => {
 
   const loadImage = async (src) => {
     const img = new Image();
-    img.crossOrigin = "anonymous"; // Fix CORS issue
+    img.crossOrigin = "anonymous";
     img.src = src;
     await new Promise((resolve) => (img.onload = resolve));
     return img;
   };
 
   const compareFaces = async () => {
+    if (!modelsLoaded) {
+      console.warn("Models not loaded yet, skipping face detection.");
+      return;
+    }
+
     try {
       const mainImg = await loadImage(mainImage);
       const mainDescriptors = await getFaceDescriptors(mainImg);
@@ -45,7 +49,7 @@ const FaceMatcher = ({ mainImage, imageArray }) => {
         return;
       }
 
-      const primaryFace = mainDescriptors[0]; // First detected face in the main image
+      const faceMatcher = new faceapi.FaceMatcher(mainDescriptors, 0.5);
       let bestMatch = { distance: 1.0, imgSrc: null };
 
       const matches = await Promise.all(
@@ -54,23 +58,18 @@ const FaceMatcher = ({ mainImage, imageArray }) => {
           const descriptors = await getFaceDescriptors(img);
           if (!descriptors.length) return null;
 
-          // Find the closest match to the primary face
-          const closest = descriptors.reduce((acc, descriptor) => {
-            const distance = faceapi.euclideanDistance(primaryFace, descriptor);
-            return distance < acc.distance ? { distance, imgSrc } : acc;
-          }, { distance: 1.0, imgSrc: null });
+          const closest = descriptors
+            .map((desc) => faceMatcher.findBestMatch(desc))
+            .find((result) => result.label !== "unknown");
 
-          console.log(`Best match for ${imgSrc}: ${closest.distance}`);
-
-          if (closest.distance < bestMatch.distance) {
-            bestMatch = closest;
+          if (closest && closest.distance < bestMatch.distance) {
+            bestMatch = { distance: closest.distance, imgSrc };
           }
 
-          return closest.distance < 0.45 ? imgSrc : null; // More strict threshold
+          return closest && closest.distance < 0.5 ? imgSrc : null;
         })
       );
 
-      // Ensure at least one good match appears
       if (!matches.some(Boolean) && bestMatch.imgSrc) {
         matches.push(bestMatch.imgSrc);
       }
@@ -82,6 +81,11 @@ const FaceMatcher = ({ mainImage, imageArray }) => {
   };
 
   const getFaceDescriptors = async (img) => {
+    if (!modelsLoaded) {
+      console.warn("Face models not loaded yet.");
+      return [];
+    }
+
     try {
       const detections = await faceapi
         .detectAllFaces(img, new faceapi.SsdMobilenetv1Options())
@@ -98,7 +102,7 @@ const FaceMatcher = ({ mainImage, imageArray }) => {
   return (
     <div style={{ textAlign: "center", padding: "20px" }}>
       <h2>Main Image</h2>
-      <img src={mainImage} alt="Main" style={{ width: 300, height: "auto", border: "3px solid black", marginBottom: 20 }} />
+      <img src={mainImage} alt="Main" style={{ width: 320, height: "auto", border: "3px solid black", marginBottom: 20 }} />
 
       <h2>All Images</h2>
       <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center" }}>
